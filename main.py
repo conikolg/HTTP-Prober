@@ -2,6 +2,7 @@
 
 import argparse
 import time
+from threading import Thread
 
 import prometheus_client
 import requests
@@ -68,7 +69,8 @@ def check_timeout(timeout) -> float:
 
 
 # Handling command line arguments
-my_parser = argparse.ArgumentParser(description='Sends a GET request to a webserver and tracks latency')
+my_parser = argparse.ArgumentParser(
+    description='Sends GET requests to a webserver at a particular frequency and tracks latency for all requests')
 my_parser.add_argument('-a', '--address', action='store', help='IP address or URL of the target webserver',
                        default='127.0.0.1', type=str)
 my_parser.add_argument('-p', '--port', action='store', help='port number of the target webserver',
@@ -78,12 +80,12 @@ my_parser.add_argument('-f', '--frequency', action='store',
                        default=1, type=check_frequency)
 my_parser.add_argument('-t', '--timeout', action='store', help='maximum time in seconds to wait for a server response',
                        default=1, type=check_timeout)
-my_parser.add_argument('--server-port', action='store', help='port number on which metrics will be exposed',
+my_parser.add_argument('-s', '--server-port', action='store', help='port number on which metrics will be exposed',
                        default=8000, type=check_port)
 arguments = my_parser.parse_args()
 
 # Prometheus metric objects
-APP_METRIC_PREFIX = 'python_probe'
+APP_METRIC_PREFIX = 'http_probe'
 http_requests_completed = prometheus_client.Counter(
     name=f'{APP_METRIC_PREFIX}_http_requests_completed',
     documentation='number of HTTP requests sent with server response',
@@ -102,6 +104,31 @@ latency_histogram = prometheus_client.Histogram(
     labelnames=('method', 'target'))
 
 
+def http_request(endpoint, timeout):
+    now = time.time()
+    try:
+        # Send request to endpoint
+        response = requests.get(endpoint, timeout=timeout)
+        # Assuming no errors in the request itself, count the type of result
+        http_requests_completed.labels(method='GET', target=endpoint, code=response.status_code).inc()
+        # Track latency only for completed requests
+        latency = time.time() - now
+        latency_gauge.labels(method='GET', target=endpoint).set(latency)
+        latency_histogram.labels(method='GET', target=endpoint).observe(latency)
+    except requests.exceptions.HTTPError:
+        http_requests_errors.labels(method='GET', target=endpoint, type='http').inc()
+    except requests.exceptions.ConnectionError:
+        http_requests_errors.labels(method='GET', target=endpoint, type='connection').inc()
+    except requests.exceptions.TooManyRedirects:
+        http_requests_errors.labels(method='GET', target=endpoint, type='redirects').inc()
+    except requests.exceptions.Timeout:
+        http_requests_errors.labels(method='GET', target=endpoint, type='timeout').inc()
+    except requests.exceptions.RequestException:
+        http_requests_errors.labels(method='GET', target=endpoint, type='request').inc()
+    except Exception:
+        http_requests_errors.labels(method='GET', target=endpoint, type='unknown').inc()
+
+
 def main():
     # Initialize some metrics
     target_endpoint = f'http://{arguments.address}:{arguments.port}'
@@ -110,37 +137,12 @@ def main():
         http_requests_errors.labels(method='GET', target=target_endpoint, type=err).inc(0)
 
     while True:
-        now = time.time()
-        try:
-            # Send request to endpoint
-            response = requests.get(target_endpoint, timeout=arguments.timeout)
-            # Assuming no errors in the request itself, count the type of result
-            http_requests_completed.labels(method='GET', target=target_endpoint, code=response.status_code).inc()
-            # Track latency only for completed requests
-            latency = time.time() - now
-            latency_gauge.labels(method='GET', target=target_endpoint).set(latency)
-            latency_histogram.labels(method='GET', target=target_endpoint).observe(latency)
-        except requests.exceptions.HTTPError:
-            http_requests_errors.labels(method='GET', target=target_endpoint, type='http').inc()
-        except requests.exceptions.ConnectionError:
-            http_requests_errors.labels(method='GET', target=target_endpoint, type='connection').inc()
-        except requests.exceptions.TooManyRedirects:
-            http_requests_errors.labels(method='GET', target=target_endpoint, type='redirects').inc()
-        except requests.exceptions.Timeout:
-            http_requests_errors.labels(method='GET', target=target_endpoint, type='timeout').inc()
-        except requests.exceptions.RequestException:
-            http_requests_errors.labels(method='GET', target=target_endpoint, type='request').inc()
-        except Exception:
-            http_requests_errors.labels(method='GET', target=target_endpoint, type='unknown').inc()
-        finally:
-            # To keep timing right for when errors occur
-            latency = time.time() - now
+        # Create thread to execute and maintain the HTTP request
+        thread = Thread(target=http_request, args=(target_endpoint, arguments.timeout))
+        thread.start()
 
-        # Wait long enough to keep pace with indicated frequency of requests per second
-        # Factor in the time this past request took
-        # Ensure we cannot wait a negative amount of times
-        print('Waiting', max(0, 1 / arguments.frequency - latency))
-        time.sleep(max(0, 1 / arguments.frequency - latency))
+        # Wait for a predetermined amount before next HTTP request
+        time.sleep(1 / arguments.frequency)
 
 
 if __name__ == '__main__':
