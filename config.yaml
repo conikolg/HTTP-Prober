@@ -1,0 +1,10 @@
+server:
+  port: 8000
+
+target:
+  protocol: https
+  address: www.google.com
+  port: 443
+  pathname: /
+  frequency: 5
+  timeout: 1
