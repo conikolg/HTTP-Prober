@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import argparse
+import os
+import signal
 import sys
 import time
 from threading import Thread
@@ -115,6 +117,14 @@ def load_configuration(pathname: str) -> bool:
         return False
 
 
+def reload_configuration(signal_number, frame):
+    print('Reloading config...')
+    if load_configuration(arguments.config_file):
+        print(config)
+    else:
+        print('Reload failed.')
+
+
 def verify_config(configuration: dict) -> bool:
     if not isinstance(configuration, dict):
         return False
@@ -167,23 +177,14 @@ def http_request(endpoint: str, timeout: float):
         http_requests_errors.labels(method='GET', target=endpoint, type='unknown').inc()
 
 
-if not load_configuration(arguments.config_file):
-    print(f'Problem occurred when loading f{arguments.config_file}.')
-    sys.exit(-1)
-
-
 def main():
-    # Initialize some necessary fields / variables
-    protocol, address = config['target']['protocol'], config['target']['address']
-    port, pathname = config['target']['port'], config['target']['pathname'],
-    target_endpoint = f'{protocol}://{address}:{port}{pathname}'
-
-    # Initialize Prometheus metric objects
-    http_requests_completed.labels(method='GET', target=target_endpoint, code=200).inc(0)
-    for err in ['http', 'connection', 'redirects', 'timeout', 'request', 'unknown']:
-        http_requests_errors.labels(method='GET', target=target_endpoint, type=err).inc(0)
 
     while True:
+        # Get necessary fields / variables from configuration
+        protocol, address = config['target']['protocol'], config['target']['address']
+        port, pathname = config['target']['port'], config['target']['pathname'],
+        target_endpoint = f'{protocol}://{address}:{port}{pathname}'
+
         # Create thread to execute and maintain the HTTP request
         thread = Thread(target=http_request, args=(target_endpoint, config['target']['timeout']))
         thread.start()
@@ -193,5 +194,17 @@ def main():
 
 
 if __name__ == '__main__':
+    # Load configuration
+    if not load_configuration(arguments.config_file):
+        print(f'Problem occurred when loading f{arguments.config_file}.')
+        sys.exit(-1)
+
+    # Output PID
+    print(f'PID: {os.getpid()}')
+
+    # Register HUP signal for hot config reload
+    signal.signal(signal.SIGHUP, reload_configuration)
+    # Expose metrics
     prometheus_client.start_http_server(config['server']['port'])
+    # Start main program
     main()
