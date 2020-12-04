@@ -77,33 +77,8 @@ my_parser.add_argument('--config-file', action='store', help='path to a configur
                        default='./config.yaml', type=str)
 arguments = my_parser.parse_args()
 
-# Load config from config.yaml
-config = None
-try:
-    with open(arguments.config_file, 'r') as file:
-        config = yaml.load(file, Loader=yaml.FullLoader)
-except IOError as e:
-    print("Config file config.yaml not found.")
-    sys.exit(-1)
-
-# Server port may be specified, but is not required
-if 'server' in config and 'port' in config['server']:
-    config['server']['port'] = check_port(config['server']['port'])
-
-# Target config block must exist
-if 'target' not in config:
-    raise Exception('No target specified in configuration file.')
-else:
-    target = config['target']
-    # An address must be defined
-    if 'address' not in target:
-        raise Exception('No address provided for target.')
-    # Other parameters are optional
-    target['port'] = 80 if 'port' not in target else check_port(target['port'])
-    target['pathname'] = '/' if 'pathname' not in target else target['pathname']
-    target['protocol'] = 'http' if 'protocol' not in target else target['protocol']
-    target['frequency'] = 1 if 'frequency' not in target else check_frequency(target['frequency'])
-    target['timeout'] = 1 if 'timeout' not in target else check_timeout(target['timeout'])
+# Declare config object
+config = dict()
 
 # Prometheus metric objects
 APP_METRIC_PREFIX = 'http_probe'
@@ -125,7 +100,49 @@ latency_histogram = prometheus_client.Histogram(
     labelnames=('method', 'target'))
 
 
-def http_request(endpoint, timeout):
+def load_configuration(pathname: str) -> bool:
+    global config
+
+    try:
+        with open(pathname, 'r') as config_file:
+            configuration = yaml.load(config_file, Loader=yaml.FullLoader)
+            if verify_config(configuration):
+                config = configuration
+                return True
+            else:
+                return False
+    except IOError:
+        return False
+
+
+def verify_config(configuration: dict) -> bool:
+    if not isinstance(configuration, dict):
+        return False
+
+    # Server port may be specified, but is not required - default to port 8000
+    if 'server' in configuration and 'port' in configuration['server']:
+        configuration['server']['port'] = check_port(configuration['server']['port'])
+    else:
+        configuration['server'] = {'port': 8000}
+
+    # Target config block must exist
+    if 'target' not in configuration:
+        return False
+    else:
+        target = configuration['target']
+        # An address must be defined
+        if 'address' not in target:
+            return False
+        # Other parameters are optional
+        target['port'] = 80 if 'port' not in target else check_port(target['port'])
+        target['pathname'] = '/' if 'pathname' not in target else target['pathname']
+        target['protocol'] = 'http' if 'protocol' not in target else target['protocol']
+        target['frequency'] = 1 if 'frequency' not in target else check_frequency(target['frequency'])
+        target['timeout'] = 1 if 'timeout' not in target else check_timeout(target['timeout'])
+        return True
+
+
+def http_request(endpoint: str, timeout: float):
     now = time.time()
     try:
         # Send request to endpoint
@@ -150,11 +167,16 @@ def http_request(endpoint, timeout):
         http_requests_errors.labels(method='GET', target=endpoint, type='unknown').inc()
 
 
+if not load_configuration(arguments.config_file):
+    print(f'Problem occurred when loading f{arguments.config_file}.')
+    sys.exit(-1)
+
+
 def main():
     # Initialize some necessary fields / variables
     protocol, address = config['target']['protocol'], config['target']['address']
     port, pathname = config['target']['port'], config['target']['pathname'],
-    target_endpoint = f"{protocol}://{address}:{port}{pathname}"
+    target_endpoint = f'{protocol}://{address}:{port}{pathname}'
 
     # Initialize Prometheus metric objects
     http_requests_completed.labels(method='GET', target=target_endpoint, code=200).inc(0)
