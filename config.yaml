@@ -2,9 +2,10 @@ server:
   port: 8000
 
 target:
-  protocol: https
+  protocol: http
   address: www.google.com
-  port: 443
+  port: 80
   pathname: /
-  frequency: 5
+  frequency: 1
   timeout: 1
+  verify_ssl: true

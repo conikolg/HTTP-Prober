@@ -92,10 +92,10 @@ http_requests_errors = prometheus_client.Counter(
     name=f'{APP_METRIC_PREFIX}_http_requests_errors',
     documentation='number of HTTP requests sent without server response',
     labelnames=('method', 'target', 'type'))
-latency_gauge = prometheus_client.Gauge(
-    name=f'{APP_METRIC_PREFIX}_latest_latency_seconds',
-    documentation='round-trip latency of most recent scrape',
-    labelnames=('method', 'target'))
+# latency_gauge = prometheus_client.Gauge(
+#     name=f'{APP_METRIC_PREFIX}_latest_latency_seconds',
+#     documentation='round-trip latency of most recent scrape',
+#     labelnames=('method', 'target'))
 latency_histogram = prometheus_client.Histogram(
     name=f'{APP_METRIC_PREFIX}_latency_seconds',
     documentation='bucketed groups of round-trip latencies',
@@ -149,19 +149,19 @@ def verify_config(configuration: dict) -> bool:
         target['protocol'] = 'http' if 'protocol' not in target else target['protocol']
         target['frequency'] = 1 if 'frequency' not in target else check_frequency(target['frequency'])
         target['timeout'] = 1 if 'timeout' not in target else check_timeout(target['timeout'])
+        target['verify_ssl'] = True if 'verify_ssl' not in target else target['verify_ssl']
         return True
 
 
-def http_request(endpoint: str, timeout: float):
+def http_request(endpoint: str, timeout: float, verify: bool):
     now = time.time()
     try:
         # Send request to endpoint
-        response = requests.get(endpoint, timeout=timeout)
+        response = requests.get(endpoint, timeout=timeout, verify=verify)
         # Assuming no errors in the request itself, count the type of result
         http_requests_completed.labels(method='GET', target=endpoint, code=response.status_code).inc()
         # Track latency only for completed requests
         latency = time.time() - now
-        latency_gauge.labels(method='GET', target=endpoint).set(latency)
         latency_histogram.labels(method='GET', target=endpoint).observe(latency)
     except requests.exceptions.HTTPError:
         http_requests_errors.labels(method='GET', target=endpoint, type='http').inc()
@@ -178,7 +178,6 @@ def http_request(endpoint: str, timeout: float):
 
 
 def main():
-
     while True:
         # Get necessary fields / variables from configuration
         protocol, address = config['target']['protocol'], config['target']['address']
@@ -186,7 +185,8 @@ def main():
         target_endpoint = f'{protocol}://{address}:{port}{pathname}'
 
         # Create thread to execute and maintain the HTTP request
-        thread = Thread(target=http_request, args=(target_endpoint, config['target']['timeout']))
+        thread = Thread(target=http_request,
+                        args=(target_endpoint, config['target']['timeout'], config['target']['verify_ssl']))
         thread.start()
 
         # Wait for a predetermined amount before next HTTP request
