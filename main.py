@@ -92,10 +92,6 @@ http_requests_errors = prometheus_client.Counter(
     name=f'{APP_METRIC_PREFIX}_http_requests_errors',
     documentation='number of HTTP requests sent without server response',
     labelnames=('method', 'target', 'type'))
-# latency_gauge = prometheus_client.Gauge(
-#     name=f'{APP_METRIC_PREFIX}_latest_latency_seconds',
-#     documentation='round-trip latency of most recent scrape',
-#     labelnames=('method', 'target'))
 latency_histogram = prometheus_client.Histogram(
     name=f'{APP_METRIC_PREFIX}_latency_seconds',
     documentation='bucketed groups of round-trip latencies',
@@ -110,6 +106,9 @@ def load_configuration(pathname: str) -> bool:
             configuration = yaml.load(config_file, Loader=yaml.FullLoader)
             if verify_config(configuration):
                 config = configuration
+                from requests.packages.urllib3.exceptions import InsecureRequestWarning
+                if not configuration['target']['verify_ssl']:
+                    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
                 return True
             else:
                 return False
